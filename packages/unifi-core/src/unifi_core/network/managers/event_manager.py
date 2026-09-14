@@ -284,7 +284,7 @@ class EventManager:
         The loop never spins against the controller: while the connection
         manager's reconnect circuit is open it only sleeps, and every failure
         backs off (doubling to ``_BACKOFF_MAX``) until an attach succeeds. A
-        rejected handshake (401/403) triggers one re-login per attempt, since
+        rejected handshake (401/403) triggers a rate-limited re-login, since
         aiounifi reuses the cookie captured at login.
         """
         backoff = self._BACKOFF_INITIAL
@@ -359,7 +359,7 @@ class EventManager:
         return steps + 1
 
     async def _reauthenticate_quietly(self) -> None:
-        """Re-login after a rejected handshake; its own failure must not end the loop."""
+        """Rate-limit re-login after rejection; failures must not end the loop."""
         try:
             ok = await self._cm.reauthenticate()
         except Exception as exc:
