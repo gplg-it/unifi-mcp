@@ -1,6 +1,6 @@
 ---
 name: unifi-access-setup
-description: Configure the UniFi Access MCP server for Claude Code, Codex, or OpenClaw — set controller host, credentials, API key, and permissions
+description: Configure the UniFi Access MCP server for a supported MCP client — set controller host, credentials, API key, and permissions
 allowed-tools: Read, Bash, AskUserQuestion
 ---
 
@@ -16,6 +16,14 @@ Use the client target that matches the current agent runtime:
 - OpenClaw: `openclaw`
 
 If the runtime is unclear, ask which client to configure. For questions, use the platform's blocking question tool when available (`AskUserQuestion` in Claude Code, `request_user_input` in Codex). If no blocking question tool is available, ask in chat with numbered options and wait for the user's reply.
+
+This skill may come from a complete UniFi plugin or a standalone `npx skills`
+install. Before using a helper script, verify that the plugin's `scripts/`
+directory exists. If it does not, do not guess a relative path: follow the
+[canonical agent installation guide](https://github.com/sirkirby/unifi-mcp/blob/main/docs/agent-install.md)
+for the client's native MCP registration path. That guide covers OpenCode,
+Antigravity, Devin Desktop, Cursor, and other manual clients. A standalone
+skill install does not install or register the MCP server by itself.
 
 On macOS and Linux, resolve setup scripts relative to this skill file:
 - `../../scripts/check-prereqs.sh`
@@ -52,18 +60,34 @@ If another UniFi MCP server is already configured, ask whether Access is on the 
 ## Step 2: Authentication
 
 Access supports two auth paths:
-- API key for read-oriented Access API calls
-- Local proxy session with username and password for mutations and broader tool coverage
+- API key for the Access Developer API visitor family, including visitor reads,
+  creation, and deletion, plus tool families that accept either credential
+- Local proxy session with username and password for local-only management tool
+  families and tool families that accept either credential
 
-Ask whether the user wants API key only, username/password only, or both. Recommend both when they want full Access management.
+Ask whether the user wants API key only, username/password only, or both.
+Recommend both for the widest Access tool coverage.
 
-For username/password, ask for:
-1. Username, using a local admin account, not a Ubiquiti SSO account
-2. Password
+For username/password, ask only for the local username. Never ask the user to send
+a password or API key in chat, and never place a raw secret in a tool call or
+command argument. Ask for exactly one indirect provider per selected secret:
+`UNIFI_ACCESS_PASSWORD_FILE=<absolute-path>` or
+`UNIFI_ACCESS_PASSWORD_COMMAND=<absolute argv>`, and
+`UNIFI_ACCESS_API_KEY_FILE=<absolute-path>` or
+`UNIFI_ACCESS_API_KEY_COMMAND=<absolute argv>`. A command provider can call a
+Keychain, `pass`, or 1Password helper; it is not run through a shell and must not
+prompt. If no indirect provider already exists, explain how to create one outside
+the chat transcript or use a client-native masked secret UI, then wait.
 
-For API key, ask for the key and include `UNIFI_ACCESS_API_KEY`.
-
-If the user would rather not store a secret in the client's settings (where every process the client spawns inherits it), offer the indirect form instead: `UNIFI_ACCESS_PASSWORD_FILE=<path>` or `UNIFI_ACCESS_API_KEY_FILE=<path>` for a file holding the value, or the `_COMMAND` suffix for a helper whose stdout is the value (for example a Keychain, `pass` or 1Password lookup; give the helper's absolute path, it is not run through a shell, and it must not prompt). Set exactly one spelling per secret; the server refuses to start if two are set. On the Claude target `set-env.sh` only adds keys, so if a plain `UNIFI_ACCESS_PASSWORD` or `UNIFI_ACCESS_API_KEY` was saved earlier, remove it from `.claude/settings.local.json` before switching; the Codex and OpenClaw targets replace the whole server entry.
+Set exactly one spelling per secret; the server refuses to start if two are set.
+On the Claude target `set-env.sh` only adds keys. Before changing or deselecting
+an authentication path, remove all of that path's existing product-scoped
+spellings: `UNIFI_ACCESS_PASSWORD`, `UNIFI_ACCESS_PASSWORD_FILE`, and
+`UNIFI_ACCESS_PASSWORD_COMMAND` for session authentication; and
+`UNIFI_ACCESS_API_KEY`, `UNIFI_ACCESS_API_KEY_FILE`, and
+`UNIFI_ACCESS_API_KEY_COMMAND` for API-key authentication. Then add only the
+provider the user selected. The Codex and OpenClaw targets replace the whole
+server entry.
 
 At least one auth path is required.
 
@@ -75,7 +99,8 @@ Ask whether to use defaults or customize:
 
 ## Step 4: Permission Configuration
 
-Ask whether to enable write permissions. By default, Access mutations are disabled for credentials, visitors, policies, and door controls.
+Ask whether to enable write permissions. The guided setup explicitly disables all
+Access mutations unless the user opts in.
 
 Options:
 - Read-only for now
@@ -84,7 +109,18 @@ Options:
 - Enable all Access write permissions except delete operations
 - Custom categories
 
-Collect any selected policy variables. Use the existing `UNIFI_POLICY_ACCESS_<CATEGORY>_<ACTION>=true` format.
+Before writing policy values, inspect the selected client's existing
+`unifi-access` MCP environment. Remove every existing category-specific
+`UNIFI_POLICY_ACCESS_<CATEGORY>_<ACTION>` entry, because those entries take
+precedence over server-level defaults. Do not remove unrelated variables. Set
+`UNIFI_ACCESS_TOOL_PERMISSION_MODE=confirm`, then add back only the
+category/action overrides the user selected.
+
+For read-only setup, explicitly configure `UNIFI_POLICY_ACCESS_CREATE=false`,
+`UNIFI_POLICY_ACCESS_UPDATE=false`, and `UNIFI_POLICY_ACCESS_DELETE=false`. For
+requested writes, keep those server-level defaults and add only selected
+category/action overrides using the existing
+`UNIFI_POLICY_ACCESS_<CATEGORY>_<ACTION>=true` format.
 
 ## Step 5: Write Configuration
 
@@ -93,9 +129,13 @@ On macOS/Linux, run the target-aware setup script with only values the user prov
 ```bash
 bash <path-to-plugin>/scripts/set-env.sh --target <claude|codex|openclaw> \
   UNIFI_ACCESS_HOST=<host> \
-  UNIFI_ACCESS_API_KEY=<api-key> \
+  'UNIFI_ACCESS_API_KEY_FILE=<absolute-path>' \
   UNIFI_ACCESS_USERNAME=<username> \
-  UNIFI_ACCESS_PASSWORD=<password>
+  'UNIFI_ACCESS_PASSWORD_FILE=<absolute-path>' \
+  UNIFI_ACCESS_TOOL_PERMISSION_MODE=confirm \
+  UNIFI_POLICY_ACCESS_CREATE=false \
+  UNIFI_POLICY_ACCESS_UPDATE=false \
+  UNIFI_POLICY_ACCESS_DELETE=false
 ```
 
 Add optional values and policy variables to the same command, for example:
@@ -103,9 +143,13 @@ Add optional values and policy variables to the same command, for example:
 ```bash
 bash <path-to-plugin>/scripts/set-env.sh --target <claude|codex|openclaw> \
   UNIFI_ACCESS_HOST=<host> \
-  UNIFI_ACCESS_API_KEY=<api-key> \
+  'UNIFI_ACCESS_API_KEY_COMMAND=<absolute-argv>' \
   UNIFI_ACCESS_USERNAME=<username> \
-  UNIFI_ACCESS_PASSWORD=<password> \
+  'UNIFI_ACCESS_PASSWORD_COMMAND=<absolute-argv>' \
+  UNIFI_ACCESS_TOOL_PERMISSION_MODE=confirm \
+  UNIFI_POLICY_ACCESS_CREATE=false \
+  UNIFI_POLICY_ACCESS_UPDATE=false \
+  UNIFI_POLICY_ACCESS_DELETE=false \
   UNIFI_ACCESS_API_PORT=12445 \
   UNIFI_POLICY_ACCESS_VISITORS_CREATE=true
 ```
